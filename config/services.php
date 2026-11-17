@@ -35,4 +35,10 @@ return [
         ],
     ],
 
+    'pixelforge' => [
+        'api_key' => env('PIXELFORGE_API_KEY'),
+        'base_url' => env('PIXELFORGE_BASE_URL', 'https://pixelforge.promptedit.dev/v1'),
+        'timeout' => (int) env('PIXELFORGE_TIMEOUT', 30),
+    ],
+
 ];
