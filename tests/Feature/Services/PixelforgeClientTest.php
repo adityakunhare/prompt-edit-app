@@ -4,28 +4,52 @@ use App\Services\PixelforgeClient;
 use Illuminate\Http\Client\Request;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 
 it('creates a generation with the configured API credentials and idempotency key', function () {
-    config([
-        'services.pixelforge.api_key' => 'test-api-key',
-        'services.pixelforge.base_url' => 'https://api.pixelforge.test/v1',
-    ]);
+    $useRealApi = false; // Set to true to use PIXELFORGE_API_KEY from .env.
 
-    Http::preventStrayRequests();
-    Http::fake([
-        'https://api.pixelforge.test/v1/generations' => Http::response([
-            'id' => 'gen_test123',
-            'status' => 'queued',
-        ], 202),
-    ]);
+    if ($useRealApi) {
+        expect(config('services.pixelforge.api_key'))->not->toBeEmpty();
+    } else {
+        config([
+            'services.pixelforge.api_key' => 'test-api-key',
+            'services.pixelforge.base_url' => 'https://api.pixelforge.test/v1',
+        ]);
+
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://api.pixelforge.test/v1/generations' => Http::response([
+                'id' => 'gen_test123',
+                'status' => 'queued',
+            ], 202),
+        ]);
+    }
 
     $payload = [
-        'prompt' => 'A lighthouse at dawn',
+        'prompt' => $useRealApi
+            ? '[succeed] Pixelforge client test'
+            : 'A lighthouse at dawn',
         'size' => '1536x1024',
         'quality' => 'high',
         'metadata' => ['order_id' => '1042'],
     ];
-    $generation = app(PixelforgeClient::class)->createGeneration($payload, 'submission-1042');
+    $idempotencyKey = $useRealApi
+        ? 'live-client-smoke-'.Str::uuid()
+        : 'submission-1042';
+    $client = app(PixelforgeClient::class);
+    $generation = $client->createGeneration($payload, $idempotencyKey);
+
+    if ($useRealApi) {
+        $retrievedGeneration = $client->getGeneration($generation['id']);
+
+        expect($generation['id'])->not->toBeEmpty();
+        expect($generation['status'])->toBe('queued');
+        expect($retrievedGeneration['id'])->toBe($generation['id']);
+        expect(in_array($retrievedGeneration['status'], ['queued', 'processing', 'succeeded'], true))->toBeTrue();
+
+        return;
+    }
 
     expect($generation)->toBe([
         'id' => 'gen_test123',
@@ -36,7 +60,7 @@ it('creates a generation with the configured API credentials and idempotency key
         && $request->url() === 'https://api.pixelforge.test/v1/generations'
         && $request->hasHeader('Authorization', 'Bearer test-api-key')
         && $request->hasHeader('Content-Type', 'application/json')
-        && $request->hasHeader('Idempotency-Key', 'submission-1042')
+        && $request->hasHeader('Idempotency-Key', $idempotencyKey)
         && $request->data() === $payload
     );
 });
