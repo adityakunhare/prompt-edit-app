@@ -12,7 +12,10 @@ class SubmitGenerationAction
     /**
      * Create a new action instance.
      */
-    public function __construct(private PixelforgeClient $pixelforgeClient) {}
+    public function __construct(
+        private PixelforgeClient $pixelforgeClient,
+        private ProcessPixelforgeWebhookAction $processWebhook,
+    ) {}
 
     /**
      * @param array{
@@ -33,7 +36,9 @@ class SubmitGenerationAction
             ->first();
 
         if ($existingGeneration !== null) {
-            return $this->reuseExistingGeneration($existingGeneration, $parameters);
+            return $this->reconcilePendingWebhooks(
+                $this->reuseExistingGeneration($existingGeneration, $parameters),
+            );
         }
 
         $providerIdempotencyKey = hash('sha256', $user->getAuthIdentifier().':'.$idempotencyKey);
@@ -55,7 +60,7 @@ class SubmitGenerationAction
         ];
 
         try {
-            return $user->generations()->create($attributes);
+            $generation = $user->generations()->create($attributes);
         } catch (QueryException $exception) {
             $existingGeneration = $user->generations()
                 ->where('idempotency_key', $idempotencyKey)
@@ -65,8 +70,10 @@ class SubmitGenerationAction
                 throw $exception;
             }
 
-            return $this->reuseExistingGeneration($existingGeneration, $parameters);
+            $generation = $this->reuseExistingGeneration($existingGeneration, $parameters);
         }
+
+        return $this->reconcilePendingWebhooks($generation);
     }
 
     /**
@@ -102,5 +109,14 @@ class SubmitGenerationAction
         }
 
         return $generation;
+    }
+
+    private function reconcilePendingWebhooks(Generation $generation): Generation
+    {
+        if ($generation->pixelforge_id !== null) {
+            $this->processWebhook->reconcile($generation->pixelforge_id);
+        }
+
+        return $generation->refresh();
     }
 }
