@@ -4,6 +4,7 @@ use App\Models\Generation;
 use App\Models\User;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Sleep;
 
 test('guests are redirected to login without calling Pixelforge', function () {
     fakePixelforgeGenerationSubmission(['id' => 'gen_test123', 'status' => 'queued']);
@@ -313,6 +314,7 @@ test('content policy errors are surfaced when Pixelforge returns 400', function 
 
 test('rate limit details are surfaced when Pixelforge returns 429', function () {
     $user = User::factory()->create();
+    Sleep::fake();
     $providerError = [
         'type' => 'rate_limit_error',
         'code' => 'rate_limit_exceeded',
@@ -331,11 +333,13 @@ test('rate limit details are surfaced when Pixelforge returns 429', function () 
         ->assertSessionHasErrors(['prompt' => $providerError['message']])
         ->assertInertiaFlash('pixelforge_error', $providerError + ['status' => 429, 'retry_after' => '17']);
 
+    Http::assertSentCount(3);
     $this->assertDatabaseCount('generations', 0);
 });
 
 test('overload details are surfaced when Pixelforge returns 503', function () {
     $user = User::factory()->create();
+    Sleep::fake();
     $providerError = [
         'type' => 'api_error',
         'code' => 'overloaded',
@@ -354,6 +358,42 @@ test('overload details are surfaced when Pixelforge returns 503', function () {
         ->assertSessionHasErrors(['prompt' => $providerError['message']])
         ->assertInertiaFlash('pixelforge_error', $providerError + ['status' => 503, 'retry_after' => '2']);
 
+    Http::assertSentCount(3);
+    $this->assertDatabaseCount('generations', 0);
+});
+
+test('connection failures are retried and surfaced without creating a generation', function () {
+    $user = User::factory()->create();
+    $message = 'Pixelforge is temporarily unavailable. Please try again.';
+
+    config([
+        'services.pixelforge.api_key' => 'test-api-key',
+        'services.pixelforge.base_url' => 'https://api.pixelforge.test/v1',
+    ]);
+
+    Sleep::fake();
+
+    Http::preventStrayRequests();
+    Http::fake([
+        'https://api.pixelforge.test/v1/generations' => Http::failedConnection('cURL error 28: Operation timed out'),
+    ]);
+
+    $response = $this
+        ->actingAs($user)
+        ->from(route('dashboard', absolute: false))
+        ->post(route('generations.store'), validPixelforgeGenerationSubmission());
+
+    $response
+        ->assertRedirect(route('dashboard', absolute: false))
+        ->assertSessionHasErrors(['prompt' => $message])
+        ->assertInertiaFlash('pixelforge_error', [
+            'type' => 'api_connection_error',
+            'code' => 'connection_error',
+            'message' => $message,
+        ]);
+
+    Http::assertSentCount(3);
+    Sleep::assertSleptTimes(2);
     $this->assertDatabaseCount('generations', 0);
 });
 

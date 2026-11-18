@@ -16,6 +16,7 @@ test('guests are redirected to login when opening generation history', function 
 
 test('users with no generations see empty history', function () {
     $user = User::factory()->create();
+    fakePixelforgeDashboardRequests();
 
     $response = $this
         ->actingAs($user)
@@ -30,6 +31,7 @@ test('users with no generations see empty history', function () {
 test('users see only their own generations with statuses and results in newest-first order', function () {
     $user = User::factory()->create();
     $anotherUser = User::factory()->create();
+    fakePixelforgeDashboardRequests();
 
     $queuedGeneration = Generation::factory()->for($user)->create([
         'status' => 'queued',
@@ -207,5 +209,30 @@ function fakePixelforgeGenerationRefresh(array $response): void
     Http::preventStrayRequests();
     Http::fake([
         'https://api.pixelforge.test/v1/generations/*' => Http::response($response),
+    ]);
+}
+
+function fakePixelforgeDashboardRequests(): void
+{
+    config([
+        'services.pixelforge.api_key' => 'test-api-key',
+        'services.pixelforge.base_url' => 'https://api.pixelforge.test/v1',
+    ]);
+
+    Http::preventStrayRequests();
+    Http::fake([
+        'https://api.pixelforge.test/v1/pricing' => Http::response([
+            'object' => 'pricing',
+            'currency' => 'usd',
+            'unit' => 'per_1m_tokens',
+            'rates' => [],
+        ]),
+        'https://api.pixelforge.test/v1/usage*' => Http::response([
+            'object' => 'usage',
+            'start_date' => '2026-10-20',
+            'end_date' => '2026-11-18',
+            'data' => [],
+            'total' => ['cost_usd' => '0.000000000'],
+        ]),
     ]);
 }

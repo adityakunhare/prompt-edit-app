@@ -5,6 +5,7 @@ import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
 import type { PageProps } from '@/types';
 
 type GenerationStatus = 'queued' | 'processing' | 'succeeded' | 'failed';
+type DashboardTab = 'generation' | 'pricing';
 
 interface GenerationHistoryItem {
     id: number;
@@ -20,8 +21,50 @@ interface GenerationHistoryItem {
     completed_at: string | null;
 }
 
+interface PricingReport {
+    currency: string;
+    unit: string;
+    rates: {
+        input_text_tokens: string;
+        input_image_tokens: string;
+        output_tokens: string;
+        reasoning_tokens: string;
+    };
+}
+
+interface UsageDay {
+    date: string;
+    generations: number;
+    input_text_tokens: number;
+    input_image_tokens: number;
+    output_tokens: number;
+    reasoning_tokens: number;
+    cost_usd: string;
+}
+
+interface UsageTotal {
+    generations: number;
+    input_text_tokens: number;
+    input_image_tokens: number;
+    output_tokens: number;
+    reasoning_tokens: number;
+    cost_usd: string;
+}
+
+interface UsageReport {
+    start_date: string;
+    end_date: string;
+    data: UsageDay[];
+    total: UsageTotal;
+}
+
 const props = defineProps<{
     generations: GenerationHistoryItem[];
+    pricing: PricingReport | null;
+    usage: UsageReport | null;
+    usageStartDate: string;
+    usageEndDate: string;
+    activeTab: DashboardTab;
 }>();
 
 const page = usePage<
@@ -33,6 +76,7 @@ const page = usePage<
 >();
 
 const generationHistory = ref([...props.generations]);
+const activeTab = ref<DashboardTab>(props.activeTab);
 const isRefreshing = ref(false);
 const refreshFailed = ref(false);
 let refreshTimer: number | undefined;
@@ -44,6 +88,16 @@ const form = useForm({
     size: '1024x1024',
     quality: 'medium',
 });
+
+const usageDateRangeForm = useForm({
+    start_date: props.usageStartDate,
+    end_date: props.usageEndDate,
+    tab: 'pricing',
+});
+
+const usageDaysWithActivity = computed(
+    () => props.usage?.data.filter(hasDailyActivity) ?? [],
+);
 
 const queuedNotice = computed(
     () => page.props.flash?.status === 'generation_queued',
@@ -64,6 +118,49 @@ function submitGeneration(): void {
             form.idempotency_key = createIdempotencyKey();
         },
     });
+}
+
+function submitUsageDateRange(): void {
+    usageDateRangeForm.get(route('dashboard'), {
+        preserveScroll: true,
+        preserveState: true,
+        replace: true,
+    });
+}
+
+function handleTabKeydown(event: KeyboardEvent): void {
+    let nextTab: DashboardTab | null = null;
+
+    if (event.key === 'ArrowRight') {
+        nextTab = activeTab.value === 'generation' ? 'pricing' : 'generation';
+    } else if (event.key === 'ArrowLeft') {
+        nextTab = activeTab.value === 'pricing' ? 'generation' : 'pricing';
+    } else if (event.key === 'End') {
+        nextTab = 'pricing';
+    } else if (event.key === 'Home') {
+        nextTab = 'generation';
+    }
+
+    if (nextTab === null) {
+        return;
+    }
+
+    event.preventDefault();
+    activeTab.value = nextTab;
+    document.getElementById(`${nextTab}-tab`)?.focus();
+}
+
+function formatProviderCost(amount: string): string {
+    return `${props.pricing?.currency.toUpperCase() ?? 'USD'} ${amount}`;
+}
+
+function hasDailyActivity(day: UsageDay): boolean {
+    return day.generations > 0
+        || day.input_text_tokens > 0
+        || day.input_image_tokens > 0
+        || day.output_tokens > 0
+        || day.reasoning_tokens > 0
+        || !/^0+(?:\.0+)?$/.test(day.cost_usd);
 }
 
 function createIdempotencyKey(): string {
@@ -208,8 +305,56 @@ onUnmounted(() => {
         </template>
 
         <div class="py-8 sm:py-12">
-            <div class="mx-auto grid max-w-7xl gap-8 px-4 sm:px-6 lg:px-8">
+            <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+                <div
+                    role="tablist"
+                    aria-label="Dashboard sections"
+                    class="inline-flex max-w-full flex-wrap gap-1 rounded-lg bg-gray-100 p-1 dark:bg-gray-900"
+                >
+                    <button
+                        id="generation-tab"
+                        type="button"
+                        role="tab"
+                        aria-controls="dashboard-tab-panel"
+                        :aria-selected="activeTab === 'generation'"
+                        :tabindex="activeTab === 'generation' ? 0 : -1"
+                        class="rounded-md px-4 py-2 text-sm font-semibold transition focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900"
+                        :class="activeTab === 'generation'
+                            ? 'bg-white text-indigo-700 shadow-sm dark:bg-gray-800 dark:text-indigo-300'
+                            : 'text-gray-600 hover:text-gray-900 dark:text-gray-300 dark:hover:text-white'"
+                        @click="activeTab = 'generation'"
+                        @keydown="handleTabKeydown"
+                    >
+                        Image generation
+                    </button>
+                    <button
+                        id="pricing-tab"
+                        type="button"
+                        role="tab"
+                        aria-controls="dashboard-tab-panel"
+                        :aria-selected="activeTab === 'pricing'"
+                        :tabindex="activeTab === 'pricing' ? 0 : -1"
+                        class="rounded-md px-4 py-2 text-sm font-semibold transition focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900"
+                        :class="activeTab === 'pricing'
+                            ? 'bg-white text-indigo-700 shadow-sm dark:bg-gray-800 dark:text-indigo-300'
+                            : 'text-gray-600 hover:text-gray-900 dark:text-gray-300 dark:hover:text-white'"
+                        @click="activeTab = 'pricing'"
+                        @keydown="handleTabKeydown"
+                    >
+                        Pricing &amp; usage
+                    </button>
+                </div>
+            </div>
+
+            <div
+                id="dashboard-tab-panel"
+                role="tabpanel"
+                tabindex="0"
+                :aria-labelledby="`${activeTab}-tab`"
+                class="mx-auto mt-8 grid max-w-7xl gap-8 px-4 focus:outline-none sm:px-6 lg:px-8"
+            >
                 <section
+                    v-show="activeTab === 'generation'"
                     class="rounded-lg bg-white p-6 shadow-sm dark:bg-gray-800 sm:p-8"
                 >
                     <div class="grid gap-2">
@@ -329,7 +474,257 @@ onUnmounted(() => {
                     </form>
                 </section>
 
-                <section class="grid gap-5">
+                <section
+                    v-show="activeTab === 'pricing'"
+                    class="grid gap-6 lg:grid-cols-2"
+                >
+                    <section
+                        class="grid content-start gap-5 rounded-lg bg-white p-6 shadow-sm dark:bg-gray-800 sm:p-8"
+                        aria-labelledby="pricing-heading"
+                    >
+                        <div class="grid gap-2">
+                            <h3
+                                id="pricing-heading"
+                                class="text-lg font-semibold text-gray-900 dark:text-gray-100"
+                            >
+                                Current pricing
+                            </h3>
+                            <p class="text-sm text-gray-600 dark:text-gray-400">
+                                Provider rates for {{ pricing?.unit.replaceAll('_', ' ') ?? 'token usage' }}.
+                            </p>
+                        </div>
+
+                        <dl
+                            v-if="pricing"
+                            class="grid gap-4 sm:grid-cols-2"
+                        >
+                            <div class="grid gap-1 rounded-md bg-gray-50 p-4 dark:bg-gray-900/60">
+                                <dt class="text-sm text-gray-600 dark:text-gray-400">
+                                    Input text tokens
+                                </dt>
+                                <dd class="font-semibold text-gray-900 dark:text-gray-100">
+                                    {{ formatProviderCost(pricing.rates.input_text_tokens) }}
+                                </dd>
+                            </div>
+                            <div class="grid gap-1 rounded-md bg-gray-50 p-4 dark:bg-gray-900/60">
+                                <dt class="text-sm text-gray-600 dark:text-gray-400">
+                                    Input image tokens
+                                </dt>
+                                <dd class="font-semibold text-gray-900 dark:text-gray-100">
+                                    {{ formatProviderCost(pricing.rates.input_image_tokens) }}
+                                </dd>
+                            </div>
+                            <div class="grid gap-1 rounded-md bg-gray-50 p-4 dark:bg-gray-900/60">
+                                <dt class="text-sm text-gray-600 dark:text-gray-400">
+                                    Output tokens
+                                </dt>
+                                <dd class="font-semibold text-gray-900 dark:text-gray-100">
+                                    {{ formatProviderCost(pricing.rates.output_tokens) }}
+                                </dd>
+                            </div>
+                            <div class="grid gap-1 rounded-md bg-gray-50 p-4 dark:bg-gray-900/60">
+                                <dt class="text-sm text-gray-600 dark:text-gray-400">
+                                    Reasoning tokens
+                                </dt>
+                                <dd class="font-semibold text-gray-900 dark:text-gray-100">
+                                    {{ formatProviderCost(pricing.rates.reasoning_tokens) }}
+                                </dd>
+                            </div>
+                        </dl>
+
+                        <p
+                            v-else
+                            role="status"
+                            class="rounded-md bg-amber-50 p-4 text-sm text-amber-800 dark:bg-amber-900/30 dark:text-amber-200"
+                        >
+                            Pricing is temporarily unavailable. Please try again shortly.
+                        </p>
+                    </section>
+
+                    <section
+                        class="grid content-start gap-5 rounded-lg bg-white p-6 shadow-sm dark:bg-gray-800 sm:p-8"
+                        aria-labelledby="usage-heading"
+                    >
+                        <div class="grid gap-2">
+                            <h3
+                                id="usage-heading"
+                                class="text-lg font-semibold text-gray-900 dark:text-gray-100"
+                            >
+                                Usage
+                            </h3>
+                            <p class="text-sm text-gray-600 dark:text-gray-400">
+                                Provider-reported totals for the selected UTC dates.
+                            </p>
+                        </div>
+
+                        <form
+                            class="grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end"
+                            @submit.prevent="submitUsageDateRange"
+                        >
+                            <div class="grid gap-2">
+                                <label
+                                    for="usage-start-date"
+                                    class="text-sm font-medium text-gray-700 dark:text-gray-300"
+                                >
+                                    Start date
+                                </label>
+                                <input
+                                    id="usage-start-date"
+                                    v-model="usageDateRangeForm.start_date"
+                                    type="date"
+                                    required
+                                    class="w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200"
+                                />
+                                <p
+                                    v-if="usageDateRangeForm.errors.start_date"
+                                    class="text-sm text-red-600 dark:text-red-400"
+                                >
+                                    {{ usageDateRangeForm.errors.start_date }}
+                                </p>
+                            </div>
+                            <div class="grid gap-2">
+                                <label
+                                    for="usage-end-date"
+                                    class="text-sm font-medium text-gray-700 dark:text-gray-300"
+                                >
+                                    End date
+                                </label>
+                                <input
+                                    id="usage-end-date"
+                                    v-model="usageDateRangeForm.end_date"
+                                    type="date"
+                                    required
+                                    class="w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200"
+                                />
+                                <p
+                                    v-if="usageDateRangeForm.errors.end_date"
+                                    class="text-sm text-red-600 dark:text-red-400"
+                                >
+                                    {{ usageDateRangeForm.errors.end_date }}
+                                </p>
+                            </div>
+                            <button
+                                type="submit"
+                                :disabled="usageDateRangeForm.processing"
+                                class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:focus:ring-offset-gray-800"
+                            >
+                                {{
+                                    usageDateRangeForm.processing
+                                        ? 'Loading…'
+                                        : 'Update'
+                                }}
+                            </button>
+                        </form>
+
+                        <div
+                            v-if="usage"
+                            class="grid gap-4"
+                        >
+                            <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                                <div class="grid gap-1 rounded-md bg-indigo-50 p-4 dark:bg-indigo-900/30">
+                                    <span class="text-sm text-indigo-800 dark:text-indigo-200">
+                                        Total generations
+                                    </span>
+                                    <span class="text-xl font-semibold text-indigo-950 dark:text-indigo-100">
+                                        {{ usage.total.generations }}
+                                    </span>
+                                </div>
+                                <div class="grid gap-1 rounded-md bg-indigo-50 p-4 dark:bg-indigo-900/30">
+                                    <span class="text-sm text-indigo-800 dark:text-indigo-200">
+                                        Total provider cost
+                                    </span>
+                                    <span class="text-xl font-semibold text-indigo-950 dark:text-indigo-100">
+                                        {{ formatProviderCost(usage.total.cost_usd) }}
+                                    </span>
+                                </div>
+                                <div class="grid gap-1 rounded-md bg-gray-50 p-4 dark:bg-gray-900/60">
+                                    <span class="text-sm text-gray-600 dark:text-gray-400">
+                                        Input text tokens
+                                    </span>
+                                    <span class="font-semibold text-gray-900 dark:text-gray-100">
+                                        {{ usage.total.input_text_tokens }}
+                                    </span>
+                                </div>
+                                <div class="grid gap-1 rounded-md bg-gray-50 p-4 dark:bg-gray-900/60">
+                                    <span class="text-sm text-gray-600 dark:text-gray-400">
+                                        Input image tokens
+                                    </span>
+                                    <span class="font-semibold text-gray-900 dark:text-gray-100">
+                                        {{ usage.total.input_image_tokens }}
+                                    </span>
+                                </div>
+                                <div class="grid gap-1 rounded-md bg-gray-50 p-4 dark:bg-gray-900/60">
+                                    <span class="text-sm text-gray-600 dark:text-gray-400">
+                                        Output tokens
+                                    </span>
+                                    <span class="font-semibold text-gray-900 dark:text-gray-100">
+                                        {{ usage.total.output_tokens }}
+                                    </span>
+                                </div>
+                                <div class="grid gap-1 rounded-md bg-gray-50 p-4 dark:bg-gray-900/60">
+                                    <span class="text-sm text-gray-600 dark:text-gray-400">
+                                        Reasoning tokens
+                                    </span>
+                                    <span class="font-semibold text-gray-900 dark:text-gray-100">
+                                        {{ usage.total.reasoning_tokens }}
+                                    </span>
+                                </div>
+                            </div>
+
+                            <div class="grid gap-2">
+                                <h4 class="text-sm font-semibold text-gray-900 dark:text-gray-100">
+                                    Daily breakdown
+                                </h4>
+                                <p
+                                    v-if="usageDaysWithActivity.length === 0"
+                                    class="text-sm text-gray-600 dark:text-gray-400"
+                                >
+                                    No usage was reported for this period.
+                                </p>
+                                <ul v-else class="grid gap-2">
+                                    <li
+                                        v-for="day in usageDaysWithActivity"
+                                        :key="day.date"
+                                        class="flex flex-wrap items-center justify-between gap-2 rounded-md border border-gray-200 px-3 py-2 text-sm dark:border-gray-700"
+                                    >
+                                        <time
+                                            :datetime="day.date"
+                                            class="text-gray-700 dark:text-gray-300"
+                                        >
+                                            {{ day.date }}
+                                        </time>
+                                        <span class="text-gray-600 dark:text-gray-400">
+                                            {{ day.generations }}
+                                            {{ day.generations === 1 ? 'generation' : 'generations' }}
+                                        </span>
+                                        <span class="font-medium text-gray-900 dark:text-gray-100">
+                                            {{ formatProviderCost(day.cost_usd) }}
+                                        </span>
+                                        <span class="basis-full text-xs text-gray-500 dark:text-gray-400">
+                                            {{ day.input_text_tokens }} text ·
+                                            {{ day.input_image_tokens }} image ·
+                                            {{ day.output_tokens }} output ·
+                                            {{ day.reasoning_tokens }} reasoning tokens
+                                        </span>
+                                    </li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <p
+                            v-else
+                            role="status"
+                            class="rounded-md bg-amber-50 p-4 text-sm text-amber-800 dark:bg-amber-900/30 dark:text-amber-200"
+                        >
+                            Usage is temporarily unavailable. Please try again shortly.
+                        </p>
+                    </section>
+                </section>
+
+                <section
+                    v-show="activeTab === 'generation'"
+                    class="grid gap-5"
+                >
                     <div
                         class="flex flex-wrap items-end justify-between gap-3"
                     >

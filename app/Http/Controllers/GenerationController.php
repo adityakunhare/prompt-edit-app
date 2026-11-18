@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Http\Requests\StoreGenerationRequest;
 use App\Services\SubmitGenerationAction;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\RedirectResponse;
 use Inertia\Inertia;
@@ -14,6 +15,17 @@ class GenerationController extends Controller
     {
         try {
             $submitGeneration->handle($request->user(), $request->validated());
+        } catch (ConnectionException) {
+            $message = 'Pixelforge is temporarily unavailable. Please try again.';
+            $providerError = [
+                'type' => 'api_connection_error',
+                'code' => 'connection_error',
+                'message' => $message,
+            ];
+
+            return Inertia::flash('pixelforge_error', $providerError)
+                ->back()
+                ->withErrors(['prompt' => $message]);
         } catch (RequestException $exception) {
             $providerError = $exception->response->json('error');
             $providerError = is_array($providerError) ? $providerError : [];

@@ -4,6 +4,7 @@ use App\Services\PixelforgeClient;
 use Illuminate\Http\Client\Request;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Sleep;
 use Illuminate\Support\Str;
 
 it('creates a generation with the configured API credentials and idempotency key', function () {
@@ -94,6 +95,81 @@ it('retrieves a generation from its configured endpoint', function () {
     );
 });
 
+it('retrieves provider pricing without sending the configured API key', function () {
+    config([
+        'services.pixelforge.api_key' => 'test-api-key',
+        'services.pixelforge.base_url' => 'https://api.pixelforge.test/v1',
+    ]);
+
+    $pricing = [
+        'object' => 'pricing',
+        'currency' => 'usd',
+        'unit' => 'per_1m_tokens',
+        'rates' => [
+            'input_text_tokens' => '5.00',
+            'input_image_tokens' => '10.00',
+            'output_tokens' => '40.00',
+            'reasoning_tokens' => '12.50',
+        ],
+    ];
+
+    Http::preventStrayRequests();
+    Http::fake([
+        'https://api.pixelforge.test/v1/pricing' => Http::response($pricing),
+    ]);
+
+    expect(app(PixelforgeClient::class)->getPricing())->toBe($pricing);
+
+    Http::assertSent(fn (Request $request): bool => $request->method() === 'GET'
+        && $request->url() === 'https://api.pixelforge.test/v1/pricing'
+        && ! $request->hasHeader('Authorization')
+    );
+});
+
+it('retrieves usage for the requested date range with exact provider costs', function () {
+    config([
+        'services.pixelforge.api_key' => 'test-api-key',
+        'services.pixelforge.base_url' => 'https://api.pixelforge.test/v1',
+    ]);
+
+    $usage = [
+        'object' => 'usage',
+        'start_date' => '2026-11-01',
+        'end_date' => '2026-11-02',
+        'data' => [[
+            'date' => '2026-11-01',
+            'generations' => 1,
+            'input_text_tokens' => 41,
+            'input_image_tokens' => 0,
+            'output_tokens' => 3300,
+            'reasoning_tokens' => 2950,
+            'cost_usd' => '0.169080000',
+        ]],
+        'total' => [
+            'generations' => 1,
+            'input_text_tokens' => 41,
+            'input_image_tokens' => 0,
+            'output_tokens' => 3300,
+            'reasoning_tokens' => 2950,
+            'cost_usd' => '0.169080000',
+        ],
+    ];
+
+    Http::preventStrayRequests();
+    Http::fake([
+        'https://api.pixelforge.test/v1/usage*' => Http::response($usage),
+    ]);
+
+    expect(app(PixelforgeClient::class)->getUsage('2026-11-01', '2026-11-02'))->toBe($usage);
+
+    Http::assertSent(fn (Request $request): bool => $request->method() === 'GET'
+        && $request->hasHeader('Authorization', 'Bearer test-api-key')
+        && parse_url($request->url(), PHP_URL_PATH) === '/v1/usage'
+        && parse_str((string) parse_url($request->url(), PHP_URL_QUERY), $query) === null
+        && $query === ['start_date' => '2026-11-01', 'end_date' => '2026-11-02']
+    );
+});
+
 it('preserves Pixelforge validation details when it returns 422', function () {
     config([
         'services.pixelforge.api_key' => 'test-api-key',
@@ -123,4 +199,130 @@ it('preserves Pixelforge validation details when it returns 422', function () {
     expect($exception)->toBeInstanceOf(RequestException::class);
     expect($exception->response->status())->toBe(422);
     expect($exception->response->json('error.code'))->toBe('validation_failed');
+
+    Http::assertSentCount(1);
+});
+
+it('retries a timed out generation with the same idempotency key', function () {
+    config([
+        'services.pixelforge.api_key' => 'test-api-key',
+        'services.pixelforge.base_url' => 'https://api.pixelforge.test/v1',
+    ]);
+
+    Sleep::fake();
+
+    $attemptedIdempotencyKeys = [];
+
+    Http::preventStrayRequests();
+    Http::fake(function (Request $request) use (&$attemptedIdempotencyKeys) {
+        $attemptedIdempotencyKeys[] = $request->header('Idempotency-Key')[0] ?? null;
+
+        if (count($attemptedIdempotencyKeys) === 1) {
+            return Http::failedConnection('cURL error 28: Operation timed out')($request);
+        }
+
+        return Http::response([
+            'id' => 'gen_test123',
+            'status' => 'queued',
+        ], 202);
+    });
+
+    $generation = app(PixelforgeClient::class)->createGeneration(
+        ['prompt' => 'A lighthouse at dawn'],
+        'submission-1042',
+    );
+
+    expect($generation['status'])->toBe('queued');
+    expect($attemptedIdempotencyKeys)->toBe(['submission-1042', 'submission-1042']);
+
+    Http::assertSentCount(2);
+    Sleep::assertSleptTimes(1);
+});
+
+it('honors Retry-After when retrying a rate-limited generation', function () {
+    config([
+        'services.pixelforge.api_key' => 'test-api-key',
+        'services.pixelforge.base_url' => 'https://api.pixelforge.test/v1',
+    ]);
+
+    Sleep::fake();
+
+    $attemptedIdempotencyKeys = [];
+
+    Http::preventStrayRequests();
+    Http::fake(function (Request $request) use (&$attemptedIdempotencyKeys) {
+        $attemptedIdempotencyKeys[] = $request->header('Idempotency-Key')[0] ?? null;
+
+        if (count($attemptedIdempotencyKeys) === 1) {
+            return Http::response([
+                'error' => [
+                    'type' => 'rate_limit_error',
+                    'code' => 'rate_limit_exceeded',
+                    'message' => 'Too many requests this minute.',
+                ],
+            ], 429, ['Retry-After' => '2']);
+        }
+
+        return Http::response([
+            'id' => 'gen_test123',
+            'status' => 'queued',
+        ], 202);
+    });
+
+    $generation = app(PixelforgeClient::class)->createGeneration(
+        ['prompt' => 'A lighthouse at dawn'],
+        'submission-1042',
+    );
+
+    expect($generation['id'])->toBe('gen_test123');
+    expect($attemptedIdempotencyKeys)->toBe(['submission-1042', 'submission-1042']);
+
+    Http::assertSentCount(2);
+    Sleep::assertSequence([Sleep::for(2)->seconds()]);
+});
+
+it('retries overloaded generations only up to the attempt limit and preserves the provider error', function () {
+    config([
+        'services.pixelforge.api_key' => 'test-api-key',
+        'services.pixelforge.base_url' => 'https://api.pixelforge.test/v1',
+    ]);
+
+    Sleep::fake();
+
+    $attemptedIdempotencyKeys = [];
+    $exception = null;
+
+    Http::preventStrayRequests();
+    Http::fake(function (Request $request) use (&$attemptedIdempotencyKeys) {
+        $attemptedIdempotencyKeys[] = $request->header('Idempotency-Key')[0] ?? null;
+
+        return Http::response([
+            'error' => [
+                'type' => 'api_error',
+                'code' => 'overloaded',
+                'message' => 'Pixelforge is temporarily overloaded.',
+            ],
+        ], 503, ['Retry-After' => '17']);
+    });
+
+    try {
+        app(PixelforgeClient::class)->createGeneration(['prompt' => 'A lighthouse at dawn'], 'submission-1042');
+    } catch (RequestException $requestException) {
+        $exception = $requestException;
+    }
+
+    expect($exception)->toBeInstanceOf(RequestException::class);
+    expect($exception->response->status())->toBe(503);
+    expect($exception->response->json('error.code'))->toBe('overloaded');
+    expect($attemptedIdempotencyKeys)->toBe([
+        'submission-1042',
+        'submission-1042',
+        'submission-1042',
+    ]);
+
+    Http::assertSentCount(3);
+    Sleep::assertSequence([
+        Sleep::for(5)->seconds(),
+        Sleep::for(5)->seconds(),
+    ]);
 });
