@@ -39,6 +39,15 @@ return [
         'api_key' => env('PIXELFORGE_API_KEY'),
         'base_url' => env('PIXELFORGE_BASE_URL', 'https://pixelforge.promptedit.dev/v1'),
         'timeout' => (int) env('PIXELFORGE_TIMEOUT', 30),
+        'image_disk' => env('PIXELFORGE_IMAGE_DISK', 'local'),
+        'image_hosts' => array_values(array_filter(array_map(
+            'trim',
+            explode(',', (string) env(
+                'PIXELFORGE_IMAGE_HOSTS',
+                parse_url(env('PIXELFORGE_BASE_URL', 'https://pixelforge.promptedit.dev/v1'), PHP_URL_HOST) ?: '',
+            )),
+        ))),
+        'image_download_timeout' => (int) env('PIXELFORGE_IMAGE_TIMEOUT', 20),
         'webhook_secret' => env('PIXELFORGE_WEBHOOK_SECRET'),
     ],
 

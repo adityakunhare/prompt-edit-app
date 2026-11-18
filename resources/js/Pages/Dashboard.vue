@@ -13,6 +13,7 @@ interface GenerationHistoryItem {
     size: string;
     quality: string;
     image_url: string | null;
+    image_is_archived: boolean;
     image_url_expires_at: string | null;
     error: { message?: string; code?: string } | null;
     created_at: string;
@@ -433,7 +434,14 @@ onUnmounted(() => {
                             </p>
 
                             <p
-                                v-if="generation.image_url_expires_at"
+                                v-if="generation.image_is_archived"
+                                class="text-xs text-gray-500 dark:text-gray-400"
+                            >
+                                Image archived in your library.
+                            </p>
+
+                            <p
+                                v-else-if="generation.image_url_expires_at"
                                 class="text-xs text-gray-500 dark:text-gray-400"
                             >
                                 Image link expires

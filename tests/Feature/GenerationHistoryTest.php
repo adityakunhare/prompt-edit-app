@@ -1,9 +1,11 @@
 <?php
 
+use App\Jobs\DownloadGenerationImage;
 use App\Models\Generation;
 use App\Models\User;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Inertia\Testing\AssertableInertia as Assert;
 
 test('guests are redirected to login when opening generation history', function () {
@@ -84,6 +86,7 @@ test('active generations refresh from Pixelforge and persist their image result'
         'pixelforge_id' => 'gen_test123',
         'status' => 'queued',
     ]);
+    Queue::fake();
 
     fakePixelforgeGenerationRefresh([
         'id' => 'gen_test123',
@@ -108,6 +111,7 @@ test('active generations refresh from Pixelforge and persist their image result'
     expect($generation->refresh()->status)->toBe('succeeded');
     expect($generation->image_url)->toBe('https://images.pixelforge.test/gen_test123.png');
     expect($generation->completed_at?->toIso8601String())->toBe('2026-11-18T12:00:00+00:00');
+    Queue::assertPushed(DownloadGenerationImage::class, fn (DownloadGenerationImage $job): bool => $job->generationId === $generation->id);
 
     Http::assertSent(fn (Request $request): bool => $request->method() === 'GET'
         && $request->url() === 'https://api.pixelforge.test/v1/generations/gen_test123'

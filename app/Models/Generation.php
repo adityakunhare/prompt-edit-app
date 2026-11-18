@@ -20,6 +20,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
     'metadata',
     'image_url',
     'image_url_expires_at',
+    'image_path',
     'usage',
     'rates',
     'error',

@@ -1,10 +1,12 @@
 <?php
 
+use App\Jobs\DownloadGenerationImage;
 use App\Models\Generation;
 use App\Models\PixelforgeWebhookEvent;
 use App\Models\User;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Testing\TestResponse;
 use Tests\TestCase;
 
@@ -14,6 +16,8 @@ test('valid signatures update a generation without a CSRF token', function () {
         'pixelforge_id' => 'gen_webhook123',
         'status' => 'processing',
     ]);
+    Queue::fake();
+    Http::preventStrayRequests();
 
     $response = sendPixelforgeWebhook($this, pixelforgeWebhookEvent([
         'id' => 'evt_succeeded123',
@@ -32,6 +36,8 @@ test('valid signatures update a generation without a CSRF token', function () {
     expect($generation->image_url)->toBe('https://images.pixelforge.test/gen_webhook123.png');
     expect($generation->image_url_expires_at?->toIso8601String())->toBe('2026-11-19T12:00:00+00:00');
     expect(PixelforgeWebhookEvent::query()->sole()->processed_at)->not->toBeNull();
+    Queue::assertPushed(DownloadGenerationImage::class, fn (DownloadGenerationImage $job): bool => $job->generationId === $generation->id);
+    Http::assertNothingSent();
 });
 
 test('invalid signatures are rejected without recording or applying the event', function () {
@@ -114,6 +120,7 @@ test('out-of-order events do not move a terminal generation back to an active st
 test('events received before generation creation are reconciled after the create response', function () {
     configurePixelforgeWebhook();
     $user = User::factory()->create();
+    Queue::fake();
     $event = pixelforgeWebhookEvent([
         'id' => 'evt_early123',
         'data' => [
@@ -152,6 +159,7 @@ test('events received before generation creation are reconciled after the create
     expect($generation->status)->toBe('succeeded');
     expect($generation->image_url)->toBe('https://images.pixelforge.test/gen_created_later.png');
     expect(PixelforgeWebhookEvent::query()->sole()->processed_at)->not->toBeNull();
+    Queue::assertPushed(DownloadGenerationImage::class, 1);
     Http::assertSentCount(1);
     Http::assertSent(fn (Request $request): bool => $request->method() === 'POST'
         && $request->url() === 'https://api.pixelforge.test/v1/generations');

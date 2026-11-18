@@ -15,6 +15,7 @@ class SubmitGenerationAction
     public function __construct(
         private PixelforgeClient $pixelforgeClient,
         private ProcessPixelforgeWebhookAction $processWebhook,
+        private QueueGenerationImageDownloadAction $queueImageDownload,
     ) {}
 
     /**
@@ -117,6 +118,9 @@ class SubmitGenerationAction
             $this->processWebhook->reconcile($generation->pixelforge_id);
         }
 
-        return $generation->refresh();
+        $generation->refresh();
+        $this->queueImageDownload->handle($generation);
+
+        return $generation;
     }
 }

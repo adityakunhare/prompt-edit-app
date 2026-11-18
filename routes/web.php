@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\GenerationController;
+use App\Http\Controllers\GenerationImageController;
 use App\Http\Controllers\GenerationRefreshController;
 use App\Http\Controllers\ProfileController;
 use Illuminate\Foundation\Application;
@@ -23,6 +24,8 @@ Route::get('/dashboard', DashboardController::class)
 
 Route::middleware('auth')->group(function () {
     Route::post('/generations', GenerationController::class)->name('generations.store');
+    Route::get('/generations/{generation}/image', GenerationImageController::class)
+        ->name('generations.image');
     Route::get('/generations/{generation}/refresh', GenerationRefreshController::class)
         ->name('generations.refresh');
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');

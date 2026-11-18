@@ -4,13 +4,18 @@ namespace App\Http\Controllers;
 
 use App\Models\Generation;
 use App\Services\PixelforgeClient;
+use App\Services\QueueGenerationImageDownloadAction;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class GenerationRefreshController extends Controller
 {
-    public function __invoke(Request $request, Generation $generation, PixelforgeClient $pixelforgeClient): JsonResponse
-    {
+    public function __invoke(
+        Request $request,
+        Generation $generation,
+        PixelforgeClient $pixelforgeClient,
+        QueueGenerationImageDownloadAction $queueImageDownload,
+    ): JsonResponse {
         $generation = $request->user()
             ->generations()
             ->whereKey($generation->getKey())
@@ -44,19 +49,26 @@ class GenerationRefreshController extends Controller
             }
         }
 
+        $queueImageDownload->handle($generation);
+        $generation->refresh();
+        $generationData = $generation->only([
+            'id',
+            'status',
+            'prompt',
+            'size',
+            'quality',
+            'image_url_expires_at',
+            'error',
+            'created_at',
+            'completed_at',
+        ]);
+        $generationData['image_url'] = $generation->image_path !== null
+            ? route('generations.image', $generation)
+            : $generation->image_url;
+        $generationData['image_is_archived'] = $generation->image_path !== null;
+
         return response()->json([
-            'generation' => $generation->only([
-                'id',
-                'status',
-                'prompt',
-                'size',
-                'quality',
-                'image_url',
-                'image_url_expires_at',
-                'error',
-                'created_at',
-                'completed_at',
-            ]),
+            'generation' => $generationData,
         ]);
     }
 }

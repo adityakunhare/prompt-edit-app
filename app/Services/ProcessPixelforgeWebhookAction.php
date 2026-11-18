@@ -17,6 +17,8 @@ class ProcessPixelforgeWebhookAction
         'failed' => 2,
     ];
 
+    public function __construct(private QueueGenerationImageDownloadAction $queueImageDownload) {}
+
     /**
      * Record an event and apply it immediately when its generation is known.
      *
@@ -50,7 +52,11 @@ class ProcessPixelforgeWebhookAction
         $isNewEvent = $webhookEvent->wasRecentlyCreated;
 
         if ($webhookEvent->processed_at === null) {
-            $this->applyEvent($webhookEvent->event_id);
+            $generation = $this->applyEvent($webhookEvent->event_id);
+
+            if ($generation !== null) {
+                $this->queueImageDownload->handle($generation);
+            }
         }
 
         return $isNewEvent;
@@ -69,16 +75,16 @@ class ProcessPixelforgeWebhookAction
         }
     }
 
-    private function applyEvent(string $eventId): void
+    private function applyEvent(string $eventId): ?Generation
     {
-        DB::transaction(function () use ($eventId): void {
+        return DB::transaction(function () use ($eventId): ?Generation {
             $webhookEvent = PixelforgeWebhookEvent::query()
                 ->where('event_id', $eventId)
                 ->lockForUpdate()
                 ->firstOrFail();
 
             if ($webhookEvent->processed_at !== null) {
-                return;
+                return null;
             }
 
             $generation = Generation::query()
@@ -87,7 +93,7 @@ class ProcessPixelforgeWebhookAction
                 ->first();
 
             if ($generation === null) {
-                return;
+                return null;
             }
 
             $generationData = $webhookEvent->payload['data'];
@@ -98,6 +104,8 @@ class ProcessPixelforgeWebhookAction
             }
 
             $webhookEvent->update(['processed_at' => now()]);
+
+            return $generation;
         });
     }
 
