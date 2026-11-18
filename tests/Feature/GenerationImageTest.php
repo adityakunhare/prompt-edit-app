@@ -69,6 +69,11 @@ test('generation history prefers an archived image over its expiring provider UR
     );
 });
 
+test('private local storage grants group access without granting access to other users', function () {
+    expect(config('filesystems.disks.local.permissions.file.private'))->toBe(0640);
+    expect(config('filesystems.disks.local.permissions.dir.private'))->toBe(0770);
+});
+
 function generationImageContentsForResponse(): string
 {
     return base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/OnoAAAAASUVORK5CYII=', true) ?: '';
